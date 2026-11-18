@@ -181,14 +181,6 @@ h1 {
 }
 
 /* SPEAKING ANIMATIONS */
-
-.robot.talking .antenna.left {
-  animation-duration: 0.45s;
-}
-  
-.robot.talking .antenna.right {
-  animation-duration: 0.6s;
-}
   
 /* BUTTON */
 
@@ -258,6 +250,44 @@ function speak() {
   const status =
     document.getElementById("status");
 
+const leftAntenna = document.querySelector(".antenna.left");
+const rightAntenna = document.querySelector(".antenna.right");
+
+function setAntennaSpeeds(talking) {
+  const antennas = [
+    { element: leftAntenna, speed: 2.1 / 0.45 },
+    { element: rightAntenna, speed: 2.7 / 0.6 }
+  ];
+
+  antennas.forEach(({ element, speed }) => {
+    if (!element) return;
+
+    const animation = element.getAnimations()[0];
+    if (!animation) return;
+
+    const target = talking ? speed : 1;
+    const start = animation.playbackRate;
+    const startTime = performance.now();
+
+    if (animation.speedChangeFrame) {
+      cancelAnimationFrame(animation.speedChangeFrame);
+    }
+
+    function update(now) {
+      const progress = Math.min((now - startTime) / 400, 1);
+      const smooth = progress * progress * (3 - 2 * progress);
+
+      animation.playbackRate = start + (target - start) * smooth;
+
+      if (progress < 1) {
+        animation.speedChangeFrame = requestAnimationFrame(update);
+      }
+    }
+
+    animation.speedChangeFrame = requestAnimationFrame(update);
+  });
+}
+  
   if (!("speechSynthesis" in window)) {
     status.textContent =
       "Speech is not supported in this browser.";
@@ -412,10 +442,12 @@ async function startCoveLiveVoice() {
 
   if (data.type === "output_audio_buffer.started") {
     robot.classList.add("talking");
+    setAntennaSpeeds(true);
   }
 
   if (data.type === "output_audio_buffer.stopped") {
     robot.classList.remove("talking");
+    setAntennaSpeeds(false);
   }
 };
     
