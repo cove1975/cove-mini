@@ -2,10 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport"
-content="width=device-width, initial-scale=1.0">
-
-<title>Cove Mini 2.0</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cove Mini 2.0 — Smooth Motion</title>
 
 <style>
 * {
@@ -16,11 +14,7 @@ body {
   margin: 0;
   min-height: 100vh;
   min-height: 100dvh;
-  background: linear-gradient(
-    160deg,
-    #e6f5ff,
-    #a9d6f3
-  );
+  background: linear-gradient(160deg, #e6f5ff, #a9d6f3);
   display: flex;
   justify-content: center;
   align-items: center;
@@ -180,8 +174,11 @@ h1 {
   }
 }
 
-/* SPEAKING ANIMATIONS */
-  
+/*
+  No talking animation overrides.
+  JavaScript changes playback speed smoothly.
+*/
+
 /* BUTTON */
 
 button {
@@ -230,10 +227,10 @@ button:active {
 
   </div>
 
-<button onclick="startCoveLiveVoice()">
-  Talk to Cove Mini
-</button>
-  
+  <button onclick="startCoveLiveVoice()">
+    Talk to Cove Mini
+  </button>
+
   <p id="status">
     Ready to say hello!
   </p>
@@ -242,92 +239,207 @@ button:active {
 
 <script>
 
+/* ROBOT ELEMENTS */
+
+const robot = document.getElementById("robot");
+
+const status = document.getElementById("status");
+
+const headGroup = document.querySelector(".head-group");
+
+const leftAntenna =
+  document.querySelector(".antenna.left");
+
+const rightAntenna =
+  document.querySelector(".antenna.right");
+
+
+/* SMOOTH MOVEMENT CONTROL */
+
+const motionParts = [
+  {
+    element: headGroup,
+    animationName: "bob",
+    talkRate: 2.6 / 1.0
+  },
+  {
+    element: leftAntenna,
+    animationName: "wiggleLeft",
+    talkRate: 2.1 / 0.45
+  },
+  {
+    element: rightAntenna,
+    animationName: "wiggleRight",
+    talkRate: 2.7 / 0.6
+  }
+];
+
+const speedTransitions = new WeakMap();
+
+
+/* FIND ANIMATION */
+
+function getPartAnimation(part) {
+
+  if (!part.element) return null;
+
+  return part.element.getAnimations().find(
+    animation =>
+      animation.animationName === part.animationName
+  ) || null;
+
+}
+
+
+/* SMOOTH SPEED TRANSITION */
+
+function smoothlySetPlaybackRate(
+  animation,
+  targetRate,
+  durationMs = 450
+) {
+
+  const previousFrame =
+    speedTransitions.get(animation);
+
+  if (previousFrame !== undefined) {
+    cancelAnimationFrame(previousFrame);
+  }
+
+  const initialRate = animation.playbackRate;
+
+  if (Math.abs(targetRate - initialRate) < 0.001) {
+    speedTransitions.delete(animation);
+    return;
+  }
+
+  let startedAt = null;
+
+  function frame(now) {
+
+    if (startedAt === null) {
+      startedAt = now;
+    }
+
+    const fraction = Math.min(
+      (now - startedAt) / durationMs,
+      1
+    );
+
+    const eased =
+      fraction * fraction * (3 - 2 * fraction);
+
+    animation.playbackRate =
+      initialRate +
+      (targetRate - initialRate) * eased;
+
+    if (fraction < 1) {
+
+      speedTransitions.set(
+        animation,
+        requestAnimationFrame(frame)
+      );
+
+    } else {
+
+      animation.playbackRate = targetRate;
+
+      speedTransitions.delete(animation);
+
+    }
+
+  }
+
+  speedTransitions.set(
+    animation,
+    requestAnimationFrame(frame)
+  );
+
+}
+
+
+/* HEAD AND ANTENNA MOVEMENT */
+
+function setCoveMotion(talking) {
+
+  robot.classList.toggle("talking", talking);
+
+  for (const part of motionParts) {
+
+    const animation = getPartAnimation(part);
+
+    if (animation) {
+
+      smoothlySetPlaybackRate(
+        animation,
+        talking ? part.talkRate : 1
+      );
+
+    }
+
+  }
+
+}
+
+
+/* BUILT-IN SPEECH DEMO */
+
 function speak() {
 
-  const robot =
-    document.getElementById("robot");
-
-  const status =
-    document.getElementById("status");
-
-const leftAntenna = document.querySelector(".antenna.left");
-const rightAntenna = document.querySelector(".antenna.right");
-
-function setAntennaSpeeds(talking) {
-  const antennas = [
-    { element: leftAntenna, speed: 2.1 / 0.45 },
-    { element: rightAntenna, speed: 2.7 / 0.6 }
-  ];
-
-  antennas.forEach(({ element, speed }) => {
-    if (!element) return;
-
-    const animation = element.getAnimations()[0];
-    if (!animation) return;
-
-    const target = talking ? speed : 1;
-    const start = animation.playbackRate;
-    const startTime = performance.now();
-
-    if (animation.speedChangeFrame) {
-      cancelAnimationFrame(animation.speedChangeFrame);
-    }
-
-    function update(now) {
-      const progress = Math.min((now - startTime) / 400, 1);
-      const smooth = progress * progress * (3 - 2 * progress);
-
-      animation.playbackRate = start + (target - start) * smooth;
-
-      if (progress < 1) {
-        animation.speedChangeFrame = requestAnimationFrame(update);
-      }
-    }
-
-    animation.speedChangeFrame = requestAnimationFrame(update);
-  });
-}
-  
   if (!("speechSynthesis" in window)) {
+
     status.textContent =
       "Speech is not supported in this browser.";
+
     return;
+
   }
 
   window.speechSynthesis.cancel();
 
-  const message =
-    new SpeechSynthesisUtterance(
-      "Hello! I'm Cove Mini! " +
-      "Look at my new antennas! " +
-      "Now I can wiggle them independently! " +
-      "What do you think?"
-    );
+  const message = new SpeechSynthesisUtterance(
+    "Hello! I'm Cove Mini! " +
+    "Look at my new antennas! " +
+    "Now I can wiggle them independently! " +
+    "What do you think?"
+  );
 
   message.lang = "en-US";
   message.rate = 0.95;
   message.pitch = 1.15;
 
   message.onstart = function() {
-    robot.classList.add("talking");
+
+    setCoveMotion(true);
+
     status.textContent =
       "Cove Mini is speaking!";
+
   };
 
   function finish() {
-    robot.classList.remove("talking");
+
+    setCoveMotion(false);
+
     status.textContent =
       "Ready to say hello!";
+
   }
 
   message.onend = finish;
   message.onerror = finish;
 
   window.speechSynthesis.speak(message);
+
 }
-// Cove Mini microphone test
+
+
+/* MICROPHONE TEST */
+
 const micButton = document.createElement("button");
+
 micButton.textContent = "🎤 Test Microphone";
+
 micButton.style.cssText =
   "padding:14px 24px; margin:20px; " +
   "border-radius:20px; font-size:18px; " +
@@ -336,31 +448,50 @@ micButton.style.cssText =
 document.body.appendChild(micButton);
 
 micButton.addEventListener("click", async () => {
+
   try {
-    micButton.textContent = "Connecting microphone...";
+
+    micButton.textContent =
+      "Connecting microphone...";
 
     const stream =
       await navigator.mediaDevices.getUserMedia({
         audio: true
       });
 
-    micButton.textContent = "✓ Microphone working!";
-    stream.getTracks().forEach(track => track.stop());
+    micButton.textContent =
+      "✓ Microphone working!";
+
+    stream.getTracks().forEach(
+      track => track.stop()
+    );
 
   } catch (error) {
-    micButton.textContent = "Microphone unavailable";
+
+    micButton.textContent =
+      "Microphone unavailable";
+
     console.error(error);
+
   }
+
 });
-  // Cove Mini — Live Voice Connection
+
+
+/* COVE MINI LIVE VOICE CONNECTION */
+
 const COVE_WORKER_URL =
   "https://cove-mini-voice.ycrt22frsb.workers.dev/session";
 
 let covePeerConnection = null;
+
 let coveMicrophoneStream = null;
 
-  // Request a temporary OpenAI voice credential
+
+/* REQUEST TEMPORARY VOICE CREDENTIAL */
+
 async function getCoveVoiceToken() {
+
   const accessToken = prompt(
     "Enter your private Cove Mini access token:"
   );
@@ -370,18 +501,24 @@ async function getCoveVoiceToken() {
   }
 
   const response = await fetch(COVE_WORKER_URL, {
+
     method: "POST",
+
     headers: {
       "Content-Type": "application/json",
       "Authorization": "Bearer " + accessToken.trim()
     },
+
     body: JSON.stringify({})
+
   });
 
   if (!response.ok) {
+
     throw new Error(
       "Voice connection failed: " + response.status
     );
+
   }
 
   const data = await response.json();
@@ -394,107 +531,169 @@ async function getCoveVoiceToken() {
   }
 
   return token;
+
 }
 
-  // Cove Mini — Live WebRTC Voice Connection
+
+/* LIVE WEBRTC VOICE CONNECTION */
+
 async function startCoveLiveVoice() {
+
   if (covePeerConnection) return;
 
   let pc;
   let mic;
 
   try {
-    // Get temporary credentials
+
     const token = await getCoveVoiceToken();
 
-    // Create voice connection
     pc = new RTCPeerConnection();
+
     covePeerConnection = pc;
 
-    // Receive Cove Mini's voice
     const audio = document.createElement("audio");
+
     audio.autoplay = true;
     audio.playsInline = true;
 
     pc.ontrack = (event) => {
+
       audio.srcObject = event.streams[0];
+
       audio.play().catch(console.error);
+
     };
 
-    // Activate microphone
+
+    /* ACTIVATE MICROPHONE */
+
     mic = await navigator.mediaDevices.getUserMedia({
       audio: true
     });
 
     coveMicrophoneStream = mic;
+
     pc.addTrack(mic.getAudioTracks()[0], mic);
 
-    // Open communication channel
-    const channel = pc.createDataChannel("oai-events");
+
+    /* OPEN COMMUNICATION CHANNEL */
+
+    const channel =
+      pc.createDataChannel("oai-events");
 
     channel.onmessage = (event) => {
-  console.log("Cove Mini:", event.data);
 
-  const data = JSON.parse(event.data);
-  const robot = document.querySelector(".robot");
+      console.log("Cove Mini:", event.data);
 
-  if (!robot) return;
+      let data;
 
-  if (data.type === "output_audio_buffer.started") {
-    robot.classList.add("talking");
-    setAntennaSpeeds(true);
-  }
+      try {
 
-  if (data.type === "output_audio_buffer.stopped") {
-    robot.classList.remove("talking");
-    setAntennaSpeeds(false);
-  }
-};
-    
-    // Establish realtime connection
+        data = JSON.parse(event.data);
+
+      } catch (error) {
+
+        console.warn("Unknown voice event:", error);
+        return;
+
+      }
+
+
+      /* COVE MINI STARTS SPEAKING */
+
+      if (data.type === "output_audio_buffer.started") {
+
+        setCoveMotion(true);
+
+        status.textContent =
+          "Cove Mini is speaking!";
+
+      }
+
+
+      /* COVE MINI STOPS SPEAKING */
+
+      if (data.type === "output_audio_buffer.stopped") {
+
+        setCoveMotion(false);
+
+        status.textContent =
+          "Ready to say hello!";
+
+      }
+
+    };
+
+
+    /* ESTABLISH REALTIME CONNECTION */
+
     const offer = await pc.createOffer();
+
     await pc.setLocalDescription(offer);
 
     const response = await fetch(
       "https://api.openai.com/v1/realtime/calls",
       {
+
         method: "POST",
+
         headers: {
           "Authorization": "Bearer " + token,
           "Content-Type": "application/sdp"
         },
+
         body: offer.sdp
+
       }
     );
 
     if (!response.ok) {
+
       throw new Error(
         "Realtime connection failed: " + response.status
       );
+
     }
 
     await pc.setRemoteDescription({
+
       type: "answer",
+
       sdp: await response.text()
+
     });
 
-    console.log("Cove Mini live voice connected!");
+    console.log(
+      "Cove Mini live voice connected!"
+    );
 
   } catch (error) {
+
     console.error("Cove Mini error:", error);
 
     if (mic) {
-      mic.getTracks().forEach(track => track.stop());
+
+      mic.getTracks().forEach(
+        track => track.stop()
+      );
+
     }
 
     if (pc) pc.close();
 
     coveMicrophoneStream = null;
+
     covePeerConnection = null;
 
+    setCoveMotion(false);
+
     alert("Cove Mini: " + error.message);
+
   }
+
 }
+
 </script>
 
 </body>
