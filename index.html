@@ -407,9 +407,22 @@ async function startCoveLiveVoice() {
     const channel = pc.createDataChannel("oai-events");
 
     channel.onmessage = (event) => {
-      console.log("Cove Mini:", event.data);
-    };
+  console.log("Cove Mini:", event.data);
 
+  const data = JSON.parse(event.data);
+  const robot = document.querySelector(".robot");
+
+  if (!robot) return;
+
+  if (data.type === "output_audio_buffer.started") {
+    robot.classList.add("talking");
+  }
+
+  if (data.type === "output_audio_buffer.stopped") {
+    robot.classList.remove("talking");
+  }
+};
+    
     // Establish realtime connection
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
