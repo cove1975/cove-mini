@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Cove Mini 3.0</title>
-
 <style>
 * { box-sizing: border-box; }
 
@@ -22,6 +21,7 @@ body {
 .container {
   text-align: center;
   padding: 20px;
+  width: 100%;
 }
 
 h1 {
@@ -35,8 +35,6 @@ h1 {
   height: 310px;
   margin: auto;
 }
-
-/* MOVING HEAD */
 
 .head-group {
   position: absolute;
@@ -59,8 +57,6 @@ h1 {
   box-shadow: 0 10px 25px #567a9950;
   z-index: 2;
 }
-
-/* INDEPENDENT ANTENNAS */
 
 .antenna {
   position: absolute;
@@ -108,8 +104,6 @@ h1 {
   75% { transform: rotate(20deg); }
 }
 
-/* EXPRESSIVE EYES */
-
 .eye {
   position: absolute;
   background: #111;
@@ -130,8 +124,6 @@ h1 {
   top: 55px;
 }
 
-/* BODY */
-
 .body {
   position: absolute;
   width: 155px;
@@ -143,19 +135,14 @@ h1 {
   box-shadow: 0 12px 25px #567a9950;
 }
 
-/* HEAD BOBBING */
-
 @keyframes bob {
   0%, 100% {
     transform: translateY(0) rotate(-5deg);
   }
-
   50% {
     transform: translateY(-14px) rotate(6deg);
   }
 }
-
-/* START / STOP BUTTON */
 
 button {
   margin-top: 15px;
@@ -175,6 +162,43 @@ button:active {
 #status {
   color: #244b68;
   min-height: 25px;
+}
+
+#webResults {
+  max-width: 540px;
+  margin: 24px auto 0;
+  padding: 18px;
+  border-radius: 20px;
+  background: #ffffffd9;
+  color: #244b68;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+#webResults h2 {
+  font-size: 17px;
+  margin: 0 0 10px;
+}
+
+#searchQuery,
+#searchNote {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+#sourceList {
+  margin: 8px 0;
+  padding-left: 22px;
+}
+
+#sourceList li {
+  margin: 10px 0;
+  line-height: 1.5;
+}
+
+#sourceList a {
+  color: #164f7a;
+  text-decoration: underline;
 }
 </style>
 </head>
@@ -204,25 +228,43 @@ button:active {
   <p id="status" role="status" aria-live="polite">
     Ready to say hello!
   </p>
+
+  <section
+    id="webResults"
+    aria-label="Web search sources"
+    hidden
+  >
+    <h2>Sources from the latest search</h2>
+    <p id="searchQuery"></p>
+    <ul id="sourceList"></ul>
+    <p id="searchNote"></p>
+  </section>
 </div>
 
 <script>
-/* ELEMENTS AND CONNECTION SETTINGS */
+/* CONNECTION SETTINGS */
 
 const robot = document.getElementById("robot");
 const status = document.getElementById("status");
 const talkButton = document.getElementById("talkButton");
+const webResults = document.getElementById("webResults");
+const searchQuery = document.getElementById("searchQuery");
+const sourceList = document.getElementById("sourceList");
+const searchNote = document.getElementById("searchNote");
+
+const COVE_WORKER_BASE =
+  "https://cove-mini-voice.ycrt22frsb.workers.dev";
 
 const COVE_WORKER_URL =
-  "https://cove-mini-voice.ycrt22frsb.workers.dev/session";
+  COVE_WORKER_BASE + "/session?web_search=1";
+
+const COVE_SEARCH_URL =
+  COVE_WORKER_BASE + "/search";
 
 const ACCESS_TOKEN_STORAGE_KEY =
   "coveMiniWorkerAccessToken";
 
 /* SMOOTH HEAD AND ANTENNA MOVEMENTS */
-
-// Each animation keeps running.
-// Only its playback speed changes.
 
 const motionParts = [
   {
@@ -271,9 +313,7 @@ function setCoveMotion(talking) {
     let start = null;
 
     function tick(now) {
-      if (start === null) {
-        start = now;
-      }
+      if (start === null) start = now;
 
       const fraction = Math.min(
         (now - start) / 450,
@@ -306,14 +346,16 @@ function setCoveMotion(talking) {
 
 /* SESSION STATE */
 
-let covePeerConnection = null;
-let coveMicrophoneStream = null;
-let coveAudio = null;
-let connectionAbort = null;
+let liveSession = null;
 let sessionVersion = 0;
-
-// Possible states: idle, connecting, connected.
 let connectionState = "idle";
+
+function isCurrent(session) {
+  return (
+    liveSession === session &&
+    session.version === sessionVersion
+  );
+}
 
 function showConnectionState(state, message) {
   connectionState = state;
@@ -326,6 +368,27 @@ function showConnectionState(state, message) {
         : "Talk to Cove Mini";
 
   status.textContent = message;
+}
+
+function updateLiveStatus(session) {
+  if (
+    !isCurrent(session) ||
+    connectionState !== "connected"
+  ) {
+    return;
+  }
+
+  status.textContent =
+    session.userSpeaking
+      ? "Listening..."
+      : session.speaking
+        ? "Cove Mini is speaking!"
+        : session.searches.size
+          ? "Checking the web..."
+          : session.activeResponses.size ||
+            session.followupRequested
+            ? "Cove Mini is thinking..."
+            : "Listening...";
 }
 
 /* REMEMBER THE COVE MINI ACCESS TOKEN */
@@ -347,7 +410,7 @@ function saveAccessToken(token) {
       token
     );
   } catch (_) {
-    // If storage is unavailable, ask again next time.
+    // This connection can still use its token in memory.
   }
 }
 
@@ -361,8 +424,6 @@ function clearAccessToken() {
   }
 }
 
-/* REQUEST A TEMPORARY VOICE CREDENTIAL */
-
 async function getCoveVoiceToken(signal) {
   let accessToken = readSavedAccessToken();
 
@@ -370,22 +431,20 @@ async function getCoveVoiceToken(signal) {
     accessToken = prompt(
       "Enter your private Cove Mini access token:"
     );
-
-    if (!accessToken || !accessToken.trim()) {
-      throw new Error("Connection cancelled.");
-    }
-
-    accessToken = accessToken.trim();
   }
+
+  if (!accessToken || !accessToken.trim()) {
+    throw new Error("Connection cancelled.");
+  }
+
+  accessToken = accessToken.trim();
 
   const response = await fetch(COVE_WORKER_URL, {
     method: "POST",
-
     headers: {
       "Content-Type": "application/json",
-      "Authorization": "Bearer " + accessToken
+      Authorization: "Bearer " + accessToken
     },
-
     body: JSON.stringify({}),
     signal
   });
@@ -409,6 +468,10 @@ async function getCoveVoiceToken(signal) {
 
   const data = await response.json();
 
+  if (signal.aborted) {
+    throw new Error("Connection cancelled.");
+  }
+
   const temporaryToken =
     data.value || data.client_secret?.value;
 
@@ -416,42 +479,495 @@ async function getCoveVoiceToken(signal) {
     throw new Error("Voice credential missing.");
   }
 
-  // Save only after the Worker accepted the token.
-  saveAccessToken(accessToken);
-
-  return temporaryToken;
-}
-
-/* STOP THE CONVERSATION */
-
-function stopCoveLiveVoice() {
-  // Invalidate any connection attempt still in progress.
-  ++sessionVersion;
-
-  if (connectionAbort) {
-    connectionAbort.abort();
+  if (
+    Array.isArray(data.session?.tools) &&
+    !data.session.tools.some(
+      tool => tool.name === "search_web"
+    )
+  ) {
+    throw new Error(
+      "Deploy the updated Cloudflare Worker, then try again."
+    );
   }
 
-  connectionAbort = null;
+  saveAccessToken(accessToken);
 
-  if (coveMicrophoneStream) {
-    coveMicrophoneStream.getTracks().forEach(
+  return {
+    temporaryToken,
+    accessToken
+  };
+}
+
+/* CLICKABLE SOURCES: NEVER INSERT WEB CONTENT AS HTML */
+
+function showSearchSources(
+  query,
+  result,
+  errorMessage = ""
+) {
+  searchQuery.textContent = query;
+  sourceList.replaceChildren();
+
+  const seen = new Set();
+
+  for (const source of result?.sources || []) {
+    let url;
+
+    try {
+      url = new URL(source.url);
+    } catch (_) {
+      continue;
+    }
+
+    if (
+      !["https:", "http:"].includes(url.protocol) ||
+      seen.has(url.href)
+    ) {
+      continue;
+    }
+
+    seen.add(url.href);
+
+    const li = document.createElement("li");
+    const link = document.createElement("a");
+
+    link.href = url.href;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = source.title || url.hostname;
+
+    li.appendChild(link);
+    sourceList.appendChild(li);
+  }
+
+  searchNote.textContent =
+    errorMessage ||
+    (
+      seen.size
+        ? "Open a source to check the details."
+        : "No source links were returned for this lookup."
+    );
+
+  webResults.hidden = false;
+}
+
+/* SEND RESULTS TO THE LIVE VOICE SESSION */
+
+function sendEvent(session, event) {
+  if (
+    !isCurrent(session) ||
+    session.channel?.readyState !== "open"
+  ) {
+    return false;
+  }
+
+  try {
+    session.channel.send(JSON.stringify(event));
+    return true;
+  } catch (_) {
+    failSession(
+      session,
+      "Voice connection lost. Press Talk to reconnect."
+    );
+
+    return false;
+  }
+}
+
+function sendToolOutput(session, callId, output) {
+  if (session.returnedCalls.has(callId)) return;
+
+  const sent = sendEvent(session, {
+    type: "conversation.item.create",
+    item: {
+      type: "function_call_output",
+      call_id: callId,
+      output: JSON.stringify(output)
+    }
+  });
+
+  if (sent) {
+    session.returnedCalls.add(callId);
+  }
+}
+
+function cancelSearches(session, notifyVoice) {
+  session.followupTurn = null;
+
+  for (
+    const [callId, controller] of session.searches
+  ) {
+    controller.abort();
+
+    if (notifyVoice) {
+      sendToolOutput(session, callId, {
+        error:
+          "Search cancelled because the user started speaking again."
+      });
+    }
+  }
+
+  session.searches.clear();
+}
+
+function requestSearchReply(session) {
+  if (
+    !isCurrent(session) ||
+    session.followupTurn !== session.turn ||
+    session.userSpeaking ||
+    session.activeResponses.size ||
+    session.searches.size ||
+    session.followupRequested
+  ) {
+    return;
+  }
+
+  session.followupTurn = null;
+  session.followupRequested = true;
+
+  sendEvent(session, {
+    type: "response.create",
+    response: {
+      output_modalities: ["audio"],
+      tool_choice: "none",
+      metadata: {
+        cove_search_turn: String(session.turn)
+      }
+    }
+  });
+
+  updateLiveStatus(session);
+}
+
+async function runSearch(session, call, turn) {
+  const controller = new AbortController();
+
+  session.searches.set(
+    call.call_id,
+    controller
+  );
+
+  const timeout = setTimeout(
+    () => controller.abort(),
+    55000
+  );
+
+  let query = "Web search";
+
+  updateLiveStatus(session);
+
+  try {
+    if (call.name !== "search_web") {
+      throw new Error("Unknown search tool.");
+    }
+
+    const args = JSON.parse(call.arguments);
+
+    query =
+      typeof args?.query === "string"
+        ? args.query.trim()
+        : "";
+
+    if (!query || query.length > 1000) {
+      throw new Error(
+        "The search query was invalid. Please try again."
+      );
+    }
+
+    const response = await fetch(
+      COVE_SEARCH_URL,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization:
+            "Bearer " + session.accessToken
+        },
+        body: JSON.stringify({ query }),
+        signal: controller.signal
+      }
+    );
+
+    if (
+      !isCurrent(session) ||
+      turn !== session.turn
+    ) {
+      return;
+    }
+
+    const result = await response.json();
+
+    if (
+      !isCurrent(session) ||
+      turn !== session.turn
+    ) {
+      return;
+    }
+
+    if (!response.ok) {
+      if (
+        response.status === 401 ||
+        response.status === 403
+      ) {
+        clearAccessToken();
+      }
+
+      throw new Error(
+        result.error ||
+        "Web search failed. Please try again."
+      );
+    }
+
+    if (
+      typeof result.answer !== "string" ||
+      !result.answer.trim()
+    ) {
+      throw new Error(
+        "The search returned no answer. Please try again."
+      );
+    }
+
+    showSearchSources(query, result);
+
+    sendToolOutput(session, call.call_id, {
+      answer: result.answer,
+      sources: result.sources || [],
+      retrieved_at: result.retrieved_at
+    });
+  } catch (error) {
+    if (
+      !isCurrent(session) ||
+      turn !== session.turn
+    ) {
+      return;
+    }
+
+    const message =
+      error.name === "AbortError"
+        ? "The web search timed out. Please try again."
+        : error.message ||
+          "Web search is unavailable right now.";
+
+    showSearchSources(
+      query,
+      null,
+      message
+    );
+
+    sendToolOutput(session, call.call_id, {
+      error: message
+    });
+  } finally {
+    clearTimeout(timeout);
+
+    session.searches.delete(
+      call.call_id
+    );
+
+    updateLiveStatus(session);
+  }
+}
+
+async function handleFunctionCalls(
+  session,
+  response,
+  turn
+) {
+  const calls = (response.output || []).filter(
+    item =>
+      item.type === "function_call" &&
+      item.call_id &&
+      !session.seenCalls.has(item.call_id)
+  );
+
+  for (const call of calls) {
+    session.seenCalls.add(call.call_id);
+  }
+
+  if (!calls.length) return;
+
+  if (
+    response.status !== "completed" ||
+    turn !== session.turn ||
+    session.userSpeaking
+  ) {
+    for (const call of calls) {
+      sendToolOutput(session, call.call_id, {
+        error:
+          "This request was interrupted. No search was started."
+      });
+    }
+
+    return;
+  }
+
+  await Promise.all(
+    calls.map(
+      call => runSearch(session, call, turn)
+    )
+  );
+
+  if (
+    !isCurrent(session) ||
+    turn !== session.turn
+  ) {
+    return;
+  }
+
+  if (
+    calls.every(
+      call =>
+        session.returnedCalls.has(call.call_id)
+    )
+  ) {
+    session.followupTurn = turn;
+    requestSearchReply(session);
+  }
+}
+
+/* VOICE EVENTS AND USER INTERRUPTIONS */
+
+function handleVoiceEvent(session, event) {
+  if (!isCurrent(session)) return;
+
+  let data;
+
+  try {
+    data = JSON.parse(event.data);
+  } catch (_) {
+    return;
+  }
+
+  switch (data.type) {
+    case "input_audio_buffer.speech_started":
+      session.turn++;
+      session.userSpeaking = true;
+      cancelSearches(session, true);
+      break;
+
+    case "input_audio_buffer.speech_stopped":
+      session.userSpeaking = false;
+      break;
+
+    case "response.created": {
+      const response = data.response;
+
+      const taggedTurn =
+        response.metadata?.cove_search_turn;
+
+      const turn =
+        taggedTurn === undefined
+          ? session.turn
+          : Number(taggedTurn);
+
+      session.followupRequested = false;
+
+      session.activeResponses.add(
+        response.id
+      );
+
+      session.responseTurns.set(
+        response.id,
+        turn
+      );
+
+      if (turn !== session.turn) {
+        sendEvent(session, {
+          type: "response.cancel",
+          response_id: response.id
+        });
+      }
+
+      break;
+    }
+
+    case "response.done": {
+      const response = data.response;
+
+      if (
+        !response ||
+        session.finishedResponses.has(response.id)
+      ) {
+        return;
+      }
+
+      session.finishedResponses.add(
+        response.id
+      );
+
+      session.activeResponses.delete(
+        response.id
+      );
+
+      const turn =
+        session.responseTurns.get(response.id) ??
+        session.turn;
+
+      session.responseTurns.delete(
+        response.id
+      );
+
+      void handleFunctionCalls(
+        session,
+        response,
+        turn
+      );
+
+      requestSearchReply(session);
+      break;
+    }
+
+    case "output_audio_buffer.started":
+      session.speaking = true;
+      setCoveMotion(true);
+      break;
+
+    case "output_audio_buffer.stopped":
+    case "output_audio_buffer.cleared":
+      session.speaking = false;
+      setCoveMotion(false);
+      break;
+
+    case "error":
+      session.followupRequested = false;
+
+      status.textContent =
+        "Cove Mini hit a voice error. Please try again.";
+
+      return;
+  }
+
+  updateLiveStatus(session);
+}
+
+/* STOP, CANCEL, AND CLEAN UP */
+
+function stopCoveLiveVoice() {
+  const session = liveSession;
+
+  liveSession = null;
+  ++sessionVersion;
+
+  if (session) {
+    clearTimeout(session.connectTimer);
+    session.abort.abort();
+
+    cancelSearches(session, false);
+
+    session.microphone?.getTracks().forEach(
       track => track.stop()
     );
 
-    coveMicrophoneStream = null;
-  }
+    session.channel?.close();
+    session.pc?.close();
 
-  if (covePeerConnection) {
-    covePeerConnection.close();
-    covePeerConnection = null;
-  }
+    if (session.audio) {
+      session.audio.pause();
+      session.audio.srcObject = null;
+      session.audio.remove();
+    }
 
-  if (coveAudio) {
-    coveAudio.pause();
-    coveAudio.srcObject = null;
-    coveAudio.remove();
-    coveAudio = null;
+    session.accessToken = "";
   }
 
   setCoveMotion(false);
@@ -462,61 +978,123 @@ function stopCoveLiveVoice() {
   );
 }
 
-/* START THE CONVERSATION */
+function failSession(session, message) {
+  if (!isCurrent(session)) return;
+
+  stopCoveLiveVoice();
+  status.textContent = message;
+}
+
+function markConnected(session) {
+  if (
+    !isCurrent(session) ||
+    session.pc?.connectionState !== "connected" ||
+    session.channel?.readyState !== "open"
+  ) {
+    return;
+  }
+
+  clearTimeout(session.connectTimer);
+
+  showConnectionState(
+    "connected",
+    "Listening..."
+  );
+
+  updateLiveStatus(session);
+}
+
+/* START THE LIVE VOICE CONNECTION */
 
 async function startCoveLiveVoice() {
   if (connectionState !== "idle") return;
 
-  const version = ++sessionVersion;
-  const controller = new AbortController();
+  const session = {
+    version: ++sessionVersion,
+    abort: new AbortController(),
+    accessToken: "",
+    pc: null,
+    channel: null,
+    microphone: null,
+    audio: null,
+    connectTimer: null,
+    turn: 0,
+    userSpeaking: false,
+    speaking: false,
+    followupTurn: null,
+    followupRequested: false,
+    activeResponses: new Set(),
+    responseTurns: new Map(),
+    finishedResponses: new Set(),
+    seenCalls: new Set(),
+    returnedCalls: new Set(),
+    searches: new Map()
+  };
 
-  connectionAbort = controller;
+  liveSession = session;
 
   showConnectionState(
     "connecting",
     "Connecting Cove Mini..."
   );
 
+  webResults.hidden = true;
+
+  session.connectTimer = setTimeout(() => {
+    failSession(
+      session,
+      "Connection timed out. Press Talk to try again."
+    );
+  }, 45000);
+
   const ensureActive = () => {
-    if (version !== sessionVersion) {
+    if (!isCurrent(session)) {
       throw new Error("Connection cancelled.");
     }
   };
 
   try {
-    const token = await getCoveVoiceToken(
-      controller.signal
+    const credentials = await getCoveVoiceToken(
+      session.abort.signal
     );
 
     ensureActive();
 
+    session.accessToken =
+      credentials.accessToken;
+
     const pc = new RTCPeerConnection();
-    covePeerConnection = pc;
+    session.pc = pc;
 
-    /* RECEIVE COVE MINI'S VOICE */
-
-    const audio = document.createElement("audio");
+    const audio =
+      document.createElement("audio");
 
     audio.autoplay = true;
     audio.playsInline = true;
     audio.style.display = "none";
 
     document.body.appendChild(audio);
-    coveAudio = audio;
+    session.audio = audio;
 
     pc.ontrack = event => {
-      audio.srcObject = event.streams[0];
-      audio.play().catch(console.error);
-    };
+      if (!isCurrent(session)) return;
 
-    /* ACTIVATE MICROPHONE */
+      audio.srcObject = event.streams[0];
+
+      audio.play().catch(() => {
+        if (isCurrent(session)) {
+          status.textContent =
+            "Audio could not start. Stop and reconnect.";
+        }
+      });
+    };
 
     const mic =
       await navigator.mediaDevices.getUserMedia({
         audio: true
       });
 
-    if (version !== sessionVersion) {
+    if (!isCurrent(session)) {
       mic.getTracks().forEach(
         track => track.stop()
       );
@@ -524,57 +1102,45 @@ async function startCoveLiveVoice() {
       throw new Error("Connection cancelled.");
     }
 
-    coveMicrophoneStream = mic;
+    session.microphone = mic;
 
     pc.addTrack(
       mic.getAudioTracks()[0],
       mic
     );
 
-    /* RECEIVE VOICE EVENTS */
-
     const channel =
       pc.createDataChannel("oai-events");
 
-    channel.onmessage = event => {
-      if (version !== sessionVersion) return;
+    session.channel = channel;
 
-      let data;
+    channel.onopen = () =>
+      markConnected(session);
 
-      try {
-        data = JSON.parse(event.data);
-      } catch (_) {
-        return;
-      }
+    channel.onmessage = event =>
+      handleVoiceEvent(session, event);
 
-      if (
-        data.type === "output_audio_buffer.started"
-      ) {
-        setCoveMotion(true);
-        status.textContent = "Cove Mini is speaking!";
-      } else if (
-        data.type === "output_audio_buffer.stopped"
-      ) {
-        setCoveMotion(false);
-        status.textContent = "Listening...";
-      }
-    };
-
-    /* CLEAN UP IF THE CONNECTION FAILS OR CLOSES */
+    channel.onclose = () =>
+      failSession(
+        session,
+        "Voice connection closed. Press Talk to reconnect."
+      );
 
     pc.onconnectionstatechange = () => {
+      if (!isCurrent(session)) return;
+
       if (
-        version === sessionVersion &&
-        (
-          pc.connectionState === "failed" ||
-          pc.connectionState === "closed"
-        )
+        pc.connectionState === "failed" ||
+        pc.connectionState === "closed"
       ) {
-        stopCoveLiveVoice();
+        failSession(
+          session,
+          "Voice connection ended. Press Talk to reconnect."
+        );
+      } else {
+        markConnected(session);
       }
     };
-
-    /* ESTABLISH THE LIVE VOICE CONNECTION */
 
     const offer = await pc.createOffer();
 
@@ -588,14 +1154,13 @@ async function startCoveLiveVoice() {
       "https://api.openai.com/v1/realtime/calls",
       {
         method: "POST",
-
         headers: {
-          "Authorization": "Bearer " + token,
+          Authorization:
+            "Bearer " + credentials.temporaryToken,
           "Content-Type": "application/sdp"
         },
-
         body: offer.sdp,
-        signal: controller.signal
+        signal: session.abort.signal
       }
     );
 
@@ -603,33 +1168,24 @@ async function startCoveLiveVoice() {
 
     if (!response.ok) {
       throw new Error(
-        "Realtime connection failed: " + response.status
+        "Realtime connection failed: " +
+        response.status
       );
     }
 
-    await pc.setRemoteDescription({
-      type: "answer",
-      sdp: await response.text()
-    });
+    const sdp = await response.text();
 
     ensureActive();
 
-    connectionAbort = null;
+    await pc.setRemoteDescription({
+      type: "answer",
+      sdp
+    });
 
-    showConnectionState(
-      "connected",
-      "Listening..."
-    );
-
-    console.log(
-      "Cove Mini live voice connected!"
-    );
-
+    ensureActive();
+    markConnected(session);
   } catch (error) {
-    // A cancelled attempt must not affect a newer session.
-    if (version !== sessionVersion) return;
-
-    console.error("Cove Mini error:", error);
+    if (!isCurrent(session)) return;
 
     stopCoveLiveVoice();
 
@@ -651,6 +1207,11 @@ talkButton.addEventListener("click", () => {
     stopCoveLiveVoice();
   }
 });
+
+window.addEventListener(
+  "pagehide",
+  stopCoveLiveVoice
+);
 </script>
 </body>
 </html>
